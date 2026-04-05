@@ -1,0 +1,28 @@
+{
+  "name": "smart-attendance-backend-node",
+  "version": "1.0.0",
+  "description": "",
+  "license": "ISC",
+  "author": "Vinil",
+  "type": "module",
+  "main": "app.js",
+  "scripts": {
+    "start": "node  attendance-core-api/app.js",
+    "dev": "cross-env NODE_ENV=DEVELOPMENT nodemon attendance-core-api/app.js",
+    "prod": "cross-env NODE_ENV=PRODUCTION nodemon  attendance-core-api/app.js"
+  },
+  "dependencies": {
+    "bcryptjs": "^3.0.3",
+    "cookie-parser": "^1.4.7",
+    "cors": "^2.8.6",
+    "cross": "^1.0.0",
+    "cross-env": "^10.1.0",
+    "crypto": "^1.0.1",
+    "dotenv": "^17.4.0",
+    "express": "^5.2.1",
+    "jsonwebtoken": "^9.0.3",
+    "mongoose": "^9.4.1",
+    "nodemailer": "^8.0.4",
+    "nodemon": "^3.1.14"
+  }
+}
