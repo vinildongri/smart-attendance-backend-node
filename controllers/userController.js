@@ -1,5 +1,5 @@
 import catchAsyncErrors from "../middlewares/catchAsyncErrors.js";
-import User from "../models/User.js"; 
+import User from "../models/user.js";
 import ErrorHandler from "../utils/errorHandler.js";
 
 // Get Current user profile => /api/v1/me
@@ -22,6 +22,11 @@ export const updateProfile = catchAsyncErrors(async (req, res, next) => {
     // Include rollNumber so users can fix typos after registration
     if (req.body.rollNumber) {
         newUserData.rollNumber = req.body.rollNumber;
+    }
+
+    // Include profilePicture if they upload a new one
+    if (req.body.profilePicture) {
+        newUserData.profilePicture = req.body.profilePicture;
     }
 
     const user = await User.findByIdAndUpdate(req.user._id, newUserData, {
@@ -99,9 +104,19 @@ export const updateUser = catchAsyncErrors(async (req, res, next) => {
         role: req.body.role,
     };
 
-    // Admins should be able to manually assign or fix roll numbers
-    if (req.body.rollNumber) {
+    // Admins can manually assign or fix roll numbers
+    if (req.body.rollNumber !== undefined) {
         newUserData.rollNumber = req.body.rollNumber;
+    }
+
+    // Admins can manually verify a user if the OTP system fails for them
+    if (req.body.isVerified !== undefined) {
+        newUserData.isVerified = req.body.isVerified;
+    }
+
+    // Admins can reset the AI face data if the student needs to take a new reference photo
+    if (req.body.resetFaceEncoding === true) {
+        newUserData.faceEncoding = []; 
     }
 
     const user = await User.findByIdAndUpdate(req.params.id, newUserData, {

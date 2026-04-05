@@ -4,6 +4,7 @@ import cookieParser from "cookie-parser";
 import cors from "cors";
 import errorMiddleware from "./middlewares/errors.js";
 import authRoutes from "./routes/auth.js";
+import userRoutes from "./routes/user.js";
 import { connectDatabase } from "./config/dbConnect.js";
 
 // Handle Uncaught exceptions
@@ -34,6 +35,7 @@ app.options(/.*/, cors());
 app.use(express.json());
 
 app.use("/api/v1", authRoutes);
+app.use("/api/v1", userRoutes);
 
 app.use(errorMiddleware);
 
