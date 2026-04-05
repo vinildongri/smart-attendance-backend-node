@@ -34,8 +34,8 @@ const UserSchema = new mongoose.Schema({
     },
     role: {
         type: String,
-        enum: ['user', 'admin'],
-        default: 'user'
+        enum: ['student', 'admin'],
+        default: 'student'
     },
     // To store the mathematical face data from Python
     faceEncoding: {

@@ -5,6 +5,7 @@ import cors from "cors";
 import errorMiddleware from "./middlewares/errors.js";
 import authRoutes from "./routes/auth.js";
 import userRoutes from "./routes/user.js";
+import attendanceRoutes from "./routes/attendance.js";
 import { connectDatabase } from "./config/dbConnect.js";
 
 // Handle Uncaught exceptions
@@ -36,6 +37,7 @@ app.use(express.json());
 
 app.use("/api/v1", authRoutes);
 app.use("/api/v1", userRoutes);
+app.use("/api/v1", attendanceRoutes);
 
 app.use(errorMiddleware);
 
