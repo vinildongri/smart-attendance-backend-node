@@ -1,10 +1,13 @@
 import express from "express";
-import { markAttendance, getMyAttendance, getAllAttendance, updateAttendance, getStudentStats, exportAttendanceCSV, getDefaulters, getDashboardStats } from "../controllers/attendanceController.js";
+import multer from 'multer';
+import { getMyAttendance, getAllAttendance, updateAttendance, getStudentStats, exportAttendanceCSV, getDefaulters, getDashboardStats, markAttendanceWithAI } from "../controllers/attendanceController.js";
 import { isAuthenticatedUser, authorizeRole } from "../middlewares/auth.js";
 
 const router = express.Router();
+const upload = multer({ dest: 'uploads/' });
 
-router.route("/attendance/mark").post(markAttendance);
+// router.route("/attendance/mark").post(markAttendanceWithAI);
+router.post('/attendance/mark', upload.array('photos', 9), markAttendanceWithAI);
 router.route("/attendance/me").get(isAuthenticatedUser, getMyAttendance);
 
 // FIXED: Changed to singular "authorizeRole" here as well

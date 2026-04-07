@@ -4,52 +4,109 @@ import User from "../models/user.js";
 import ErrorHandler from "../utils/errorHandler.js";
 
 // 1. Mark Attendance (Called by Python AI or Admin) => /api/v1/attendance/mark
-export const markAttendance = catchAsyncErrors(async (req, res, next) => {
-    // The Python script will send the rollNumber it detected, plus the AI stats
-    const { rollNumber, aiConfidenceScore, cameraLocation } = req.body;
+import { spawn } from 'child_process';
+import fs from 'fs';
+import path from 'path';
 
-    if (!rollNumber || !aiConfidenceScore) {
-        return next(new ErrorHandler("Missing required AI data: rollNumber or aiConfidenceScore", 400));
+export const markAttendanceWithAI = catchAsyncErrors(async (req, res, next) => {
+    const files = req.files;
+
+    if (!files || files.length === 0) {
+        return res.status(400).json({ success: false, message: "No photos uploaded." });
     }
 
-    // Step 1: Find the actual user ID using the roll number the AI provided
-    const student = await User.findOne({ rollNumber });
-    if (!student) {
-        return next(new ErrorHandler(`No student found with Roll Number: ${rollNumber}`, 404));
-    }
+    const filePaths = files.map(file => path.resolve(file.path));
 
-    // Step 2: Generate today's date in a standard "YYYY-MM-DD" format
-    // (We do this on the server so students can't spoof their phone's timezone)
-    const today = new Date();
-    const formattedDate = today.toISOString().split('T')[0];
+    const pythonProjectDir = path.resolve('../smart-attendance-backend-py');
+    const pythonExecutable = path.resolve('../smart-attendance-backend-py/venv/bin/python');
 
-    // Step 3: Check if the student was already marked present today
-    const existingAttendance = await Attendance.findOne({
-        student: student._id,
-        date: formattedDate
+    const pythonProcess = spawn(pythonExecutable, ['-m', 'src.test_image', ...filePaths], {
+        cwd: pythonProjectDir
     });
 
-    if (existingAttendance) {
-        return res.status(200).json({
-            success: true,
-            message: `${student.name} is already marked present for today.`,
-            attendance: existingAttendance
+    let pythonOutput = '';
+
+    pythonProcess.on('error', (error) => {
+        console.error(`[CRITICAL] Failed to start Python Engine:`, error);
+        filePaths.forEach(fp => { if (fs.existsSync(fp)) fs.unlinkSync(fp); });
+        return res.status(500).json({
+            success: false,
+            message: "Server Configuration Error: Could not start the AI engine."
         });
-    }
-
-    // Step 4: Create the new attendance record
-    const attendance = await Attendance.create({
-        student: student._id,
-        date: formattedDate,
-        aiConfidenceScore,
-        cameraLocation,
-        status: "Present"
     });
 
-    res.status(201).json({
-        success: true,
-        message: `Attendance successfully marked for ${student.name}`,
-        attendance
+    pythonProcess.stdout.on('data', (data) => {
+        pythonOutput += data.toString();
+        console.log(`[Python Output]: ${data.toString().trim()}`);
+    });
+
+    pythonProcess.stderr.on('data', (data) => {
+        console.error(`[Python Error]: ${data.toString()}`);
+    });
+
+    pythonProcess.on('close', async (code) => {
+        filePaths.forEach(fp => { if (fs.existsSync(fp)) fs.unlinkSync(fp); });
+
+        if (code !== 0 && code !== null) {
+            return res.status(500).json({ success: false, message: "AI processing failed or crashed." });
+        }
+
+        try {
+            const resultString = pythonOutput.split('===RESULT===')[1];
+
+            if (!resultString) {
+                throw new Error("Python script did not output ===RESULT===");
+            }
+
+            const resultJson = JSON.parse(resultString.trim());
+            const recognizedRollNumbers = resultJson.recognizedStudents.map(student => student.rollNumber);
+
+            if (recognizedRollNumbers.length === 0) {
+                return res.status(200).json({
+                    success: true,
+                    message: "No recognized faces found in the uploaded images.",
+                    recognizedStudents: []
+                });
+            }
+
+            const today = new Date();
+            const formattedDate = today.toISOString().split('T')[0];
+            const newlyMarkedStudents = [];
+
+            for (const rollNumber of recognizedRollNumbers) {
+                const student = await User.findOne({ rollNumber });
+
+                if (student) {
+                    const existingAttendance = await Attendance.findOne({
+                        student: student._id,
+                        date: formattedDate
+                    });
+
+                    if (!existingAttendance) {
+                        await Attendance.create({
+                            student: student._id,
+                            date: formattedDate,
+                            aiConfidenceScore: 100,
+                            cameraLocation: "Manual Upload - Bulk Photos",
+                            status: "Present"
+                        });
+                        newlyMarkedStudents.push({ name: student.name, rollNumber: student.rollNumber });
+                    } else {
+                        newlyMarkedStudents.push({ name: student.name, rollNumber: student.rollNumber });
+                    }
+                }
+            }
+
+            res.status(200).json({
+                success: true,
+                message: `Successfully processed images.`,
+                recognizedStudents: newlyMarkedStudents
+            });
+
+        } catch (error) {
+            console.error("Database or Parsing Error after AI finish:", error);
+            res.status(500).json({ success: false, message: "Error reading AI results or updating database." });
+        }
     });
 });
 
@@ -203,40 +260,54 @@ export const getDefaulters = catchAsyncErrors(async (req, res, next) => {
     });
 });
 
-// 7. Export Attendance to CSV (ADMIN) => /api/v1/admin/attendance/export?date=2026-04-05
+// 7. Export Attendance to CSV or JSON (ADMIN) 
+// URL: /api/v1/admin/attendance/export?date=2026-04-05&format=json
 export const exportAttendanceCSV = catchAsyncErrors(async (req, res, next) => {
-    const query = req.query.date ? { date: req.query.date } : {};
+    const { date, format } = req.query;
+    const query = date ? { date } : {};
 
     const records = await Attendance.find(query)
         .populate("student", "name rollNumber")
         .sort({ date: -1 });
 
     if (records.length === 0) {
-        return next(new ErrorHandler("No records found to export", 404));
+        return next(new ErrorHandler("No records found for this date", 404));
     }
 
-    // 1. Define CSV Column Headers
+    // --- CASE 1: FRONTEND TABLE PREVIEW (JSON) ---
+    if (format === 'json') {
+        const formattedRecords = records.map(record => ({
+            date: record.date,
+            rollNumber: record.student ? record.student.rollNumber : "N/A",
+            name: record.student ? record.student.name : "Deleted User",
+            status: record.status,
+            aiScore: record.aiConfidenceScore || "N/A",
+            remarks: record.adminRemarks || ""
+        }));
+
+        return res.status(200).json({
+            success: true,
+            records: formattedRecords
+        });
+    }
+
+    // --- CASE 2: ACTUAL DOWNLOAD (CSV) ---
     let csvData = "Date,Roll Number,Student Name,Status,AI Score,Remarks\n";
 
-    // 2. Map data to rows
     records.forEach((record) => {
-        const date = record.date;
-        // Check if student exists before accessing name/rollNumber to prevent crashes if a user was deleted
-        const rollNumber = record.student ? record.student.rollNumber : "N/A";
+        const rDate = record.date;
+        const roll = record.student ? record.student.rollNumber : "N/A";
         const name = record.student ? record.student.name : "Deleted User";
         const status = record.status;
-        const aiScore = record.aiConfidenceScore ? record.aiConfidenceScore : "N/A";
+        const aiScore = record.aiConfidenceScore || "N/A";
         const remarks = record.adminRemarks || "";
 
-        // Add row string
-        csvData += `${date},${rollNumber},${name},${status},${aiScore},${remarks}\n`;
+        csvData += `${rDate},${roll},${name},${status},${aiScore},${remarks}\n`;
     });
 
-    // 3. Set headers to trigger a file download in the browser/client
     res.setHeader("Content-Type", "text/csv");
-    res.setHeader("Content-Disposition", "attachment; filename=attendance_report.csv");
-
-    // 4. Send the raw CSV text
+    res.setHeader("Content-Disposition", `attachment; filename=attendance_${date || 'report'}.csv`);
+    
     res.status(200).send(csvData);
 });
 
