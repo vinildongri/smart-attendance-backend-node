@@ -209,36 +209,51 @@ export const getStudentStats = catchAsyncErrors(async (req, res, next) => {
     });
 });
 
-// 6. Get Defaulters List (ADMIN)
+
+// 6. Get Defaulters List (ADMIN) => /api/v1/admin/attendance/defaulters
 export const getDefaulters = catchAsyncErrors(async (req, res, next) => {
 
-    // Sometimes populate() hangs if the schema isn't perfectly linked
-    const records = await Attendance.find().populate("student", "name rollNumber email");
+    // 1. Fetch ALL students and ALL attendance records independently
+    const [students, records] = await Promise.all([
+        User.find({ role: "student" }).select("name rollNumber email _id"),
+        Attendance.find().select("student status date") // No populate needed, much faster!
+    ]);
 
+    // 2. Calculate the TRUE Total Working Days for the school
+    const uniqueDates = new Set();
+    records.forEach(rec => uniqueDates.add(rec.date));
+    const totalWorkingDays = uniqueDates.size;
+
+    // If no classes have happened yet, there are no defaulters
+    if (totalWorkingDays === 0) {
+        return res.status(200).json({ success: true, count: 0, defaulters: [] });
+    }
+
+    // 3. Initialize stats for EVERY active student, ensuring nobody is skipped
     const studentStats = {};
+    students.forEach(student => {
+        studentStats[student._id.toString()] = {
+            student: student,
+            presentDays: 0
+        };
+    });
 
+    // 4. Count Present/Late days
     records.forEach(record => {
         if (!record.student) return;
-        const sId = record.student._id.toString();
+        const sId = record.student.toString();
 
-        if (!studentStats[sId]) {
-            studentStats[sId] = {
-                student: record.student,
-                totalDays: 0,
-                presentDays: 0
-            };
-        }
-
-        studentStats[sId].totalDays += 1;
-        if (["Present", "Excused", "Late"].includes(record.status)) {
+        // If the student exists and was present/late, increment their count
+        if (studentStats[sId] && ["Present", "Excused", "Late", "Half-Day"].includes(record.status)) {
             studentStats[sId].presentDays += 1;
         }
     });
 
+    // 5. Filter for Defaulters (< 75%) against the GLOBAL working days
     const defaulters = [];
     for (const key in studentStats) {
         const stat = studentStats[key];
-        const percentage = (stat.presentDays / stat.totalDays) * 100;
+        const percentage = (stat.presentDays / totalWorkingDays) * 100;
 
         if (percentage < 75) {
             defaulters.push({
@@ -246,12 +261,15 @@ export const getDefaulters = catchAsyncErrors(async (req, res, next) => {
                 name: stat.student.name,
                 rollNumber: stat.student.rollNumber,
                 email: stat.student.email,
-                totalDays: stat.totalDays,
+                totalDays: totalWorkingDays,
                 presentDays: stat.presentDays,
                 percentage: percentage.toFixed(2) + "%"
             });
         }
     }
+
+    // 6. Sort so the absolute worst attendance (0%) shows up at the top
+    defaulters.sort((a, b) => parseFloat(a.percentage) - parseFloat(b.percentage));
 
     res.status(200).json({
         success: true,
@@ -260,8 +278,7 @@ export const getDefaulters = catchAsyncErrors(async (req, res, next) => {
     });
 });
 
-// 7. Export Attendance to CSV or JSON (ADMIN) 
-// URL: /api/v1/admin/attendance/export?date=2026-04-05&format=json
+// 7. Export Attendance to CSV or JSON (ADMIN) => /api/v1/admin/attendance/export?date=2026-04-05&format=json
 export const exportAttendanceCSV = catchAsyncErrors(async (req, res, next) => {
     const { date, format } = req.query;
     const query = date ? { date } : {};
@@ -307,7 +324,7 @@ export const exportAttendanceCSV = catchAsyncErrors(async (req, res, next) => {
 
     res.setHeader("Content-Type", "text/csv");
     res.setHeader("Content-Disposition", `attachment; filename=attendance_${date || 'report'}.csv`);
-    
+
     res.status(200).send(csvData);
 });
 
@@ -358,5 +375,81 @@ export const getDashboardStats = catchAsyncErrors(async (req, res, next) => {
             unmarked: unmarked > 0 ? unmarked : 0 // Prevents negative numbers if there are duplicate records
         },
         recentCheckins
+    });
+});
+
+
+
+// Get Attendance Analytics for ALL students - ADMIN  => /api/v1/admin/attendance/stats
+export const getAllStudentsStats = catchAsyncErrors(async (req, res, next) => {
+    // 1. Fetch ALL active students and ALL attendance records in parallel
+    const [students, records] = await Promise.all([
+        User.find({ role: "student" }).select("name rollNumber _id"),
+        Attendance.find().select("student status date")
+    ]);
+
+    if (!students || students.length === 0) {
+        return next(new ErrorHandler("No students found in the database.", 404));
+    }
+
+    const uniqueDates = new Set();
+    records.forEach(rec => uniqueDates.add(rec.date));
+    const totalWorkingDays = uniqueDates.size;
+
+    const statsMap = new Map();
+    students.forEach(student => {
+        statsMap.set(student._id.toString(), {
+            studentId: student._id,
+            name: student.name,
+            rollNumber: student.rollNumber,
+            present: 0,
+            late: 0,
+        });
+    });
+
+    records.forEach(record => {
+        if (!record.student) return; // Skip if student was deleted
+
+        const studentId = record.student.toString();
+
+        if (statsMap.has(studentId)) {
+            const stat = statsMap.get(studentId);
+
+            if (record.status === "Present" || record.status === "Excused") {
+                stat.present++;
+            } else if (record.status === "Late" || record.status === "Half-Day") {
+                stat.late++;
+            }
+        }
+    });
+
+    const finalStats = [];
+
+    statsMap.forEach(stat => {
+        const absent = totalWorkingDays - (stat.present + stat.late);
+
+        const percentage = totalWorkingDays > 0
+            ? (((stat.present + stat.late) / totalWorkingDays) * 100).toFixed(2)
+            : "0.00";
+
+        finalStats.push({
+            studentId: stat.studentId,
+            name: stat.name,
+            rollNumber: stat.rollNumber,
+            present: stat.present,
+            absent: absent > 0 ? absent : 0, // Fallback to prevent negative numbers
+            late: stat.late,
+            percentage: parseFloat(percentage),
+            percentageString: `${percentage}%`
+        });
+    });
+
+    finalStats.sort((a, b) => b.percentage - a.percentage);
+
+    res.status(200).json({
+        success: true,
+        totalWorkingDays,
+        totalStudents: finalStats.length,
+        stats: finalStats
     });
 });

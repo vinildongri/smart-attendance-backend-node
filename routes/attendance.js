@@ -1,6 +1,6 @@
 import express from "express";
 import multer from 'multer';
-import { getMyAttendance, getAllAttendance, updateAttendance, getStudentStats, exportAttendanceCSV, getDefaulters, getDashboardStats, markAttendanceWithAI } from "../controllers/attendanceController.js";
+import { getMyAttendance, getAllAttendance, updateAttendance, getStudentStats, exportAttendanceCSV, getDefaulters, getDashboardStats, markAttendanceWithAI, getAllStudentsStats } from "../controllers/attendanceController.js";
 import { isAuthenticatedUser, authorizeRole } from "../middlewares/auth.js";
 
 const router = express.Router();
@@ -24,6 +24,10 @@ router.route("/admin/attendance/export")
 
 router.route("/admin/attendance/stats/:studentId")
     .get(isAuthenticatedUser, authorizeRole("admin"), getStudentStats);
+
+router.route("/admin/attendance/stats")
+    .get(isAuthenticatedUser, authorizeRole("admin"), getAllStudentsStats);
+
 
 router.route("/admin/attendance/dashboard")
     .get(isAuthenticatedUser, authorizeRole("admin"), getDashboardStats);
