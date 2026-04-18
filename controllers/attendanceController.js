@@ -19,7 +19,8 @@ export const markAttendanceWithAI = catchAsyncErrors(async (req, res, next) => {
         // --- 1. PREPARE DATA ---
         const formData = new FormData();
         files.forEach((file) => {
-            formData.append('images', fs.createReadStream(file.path));
+            // Pass the memory buffer directly, and include originalname
+            formData.append('images', file.buffer, file.originalname);
         });
 
         // --- 2. CALL PYTHON API (HTTP instead of Spawn) ---
@@ -29,9 +30,6 @@ export const markAttendanceWithAI = catchAsyncErrors(async (req, res, next) => {
         const response = await axios.post(pythonApiUrl, formData, {
             headers: { ...formData.getHeaders() }
         });
-
-        // Clean up uploaded files from Node server disk immediately after sending
-        files.forEach(file => { if (fs.existsSync(file.path)) fs.unlinkSync(file.path); });
 
         // --- 3. PROCESS RESULTS ---
         const { recognizedStudents } = response.data;
@@ -79,9 +77,6 @@ export const markAttendanceWithAI = catchAsyncErrors(async (req, res, next) => {
         });
 
     } catch (error) {
-        // Clean up files if an error occurs during the API call
-        files.forEach(file => { if (fs.existsSync(file.path)) fs.unlinkSync(file.path); });
-
         console.error("AI processing or Database Error:", error);
         res.status(500).json({
             success: false,

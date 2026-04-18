@@ -4,7 +4,9 @@ import { getMyAttendance, getAllAttendance, updateAttendance, getStudentStats, e
 import { isAuthenticatedUser, authorizeRole } from "../middlewares/auth.js";
 
 const router = express.Router();
-const upload = multer({ dest: 'uploads/' });
+// const upload = multer({ dest: 'uploads/' });
+const storage = multer.memoryStorage();
+const upload = multer({ storage: storage });
 
 // router.route("/attendance/mark").post(markAttendanceWithAI);
 router.post('/attendance/mark', upload.array('photos', 9), markAttendanceWithAI);
