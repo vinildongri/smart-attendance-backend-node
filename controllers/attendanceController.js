@@ -17,8 +17,8 @@ export const markAttendanceWithAI = catchAsyncErrors(async (req, res, next) => {
 
     const filePaths = files.map(file => path.resolve(file.path));
 
-    const pythonProjectDir = path.resolve('../smart-attendance-backend-py');
-    const pythonExecutable = path.resolve('../smart-attendance-backend-py/venv/bin/python');
+    const pythonProjectDir = path.resolve(`${process.env.PYTHON_PROJECT_DIR}`);
+    const pythonExecutable = path.resolve(`${process.env.PYTHON_EXECUTABLE}`);
 
     const pythonProcess = spawn(pythonExecutable, ['-m', 'src.test_image', ...filePaths], {
         cwd: pythonProjectDir

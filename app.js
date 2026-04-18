@@ -23,12 +23,22 @@ connectDatabase();
 
 app.use(cookieParser());
 
+// app.use(cors({
+//   origin: [
+//     "http://localhost:3000"
+//   ],
+//   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+//   credentials: true
+// }));
+
 app.use(cors({
-  origin: [
-    "http://localhost:3000"
-  ],
-  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-  credentials: true
+    origin: [
+        'http://localhost:5173', // Keep local for testing
+        'http://localhost:3000', 
+        'https://smart-attendance-frontend-kappa.vercel.app' // ADD YOUR VERCEL FRONTEND URL HERE
+    ],
+    credentials: true, // This is important if you are using cookies for JWT tokens
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'], // Ensure OPTIONS is allowed for preflight
 }));
 
 app.options(/.*/, cors());
