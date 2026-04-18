@@ -12,6 +12,7 @@
     "prod": "cross-env NODE_ENV=PRODUCTION nodemon  attendance-core-api/app.js"
   },
   "dependencies": {
+    "axios": "^1.15.0",
     "bcryptjs": "^3.0.3",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.6",
@@ -20,6 +21,7 @@
     "crypto": "^1.0.1",
     "dotenv": "^17.4.0",
     "express": "^5.2.1",
+    "form-data": "^4.0.5",
     "jsonwebtoken": "^9.0.3",
     "mongoose": "^9.4.1",
     "multer": "^2.1.1",

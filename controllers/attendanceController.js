@@ -3,11 +3,11 @@ import Attendance from "../models/Attendance.js";
 import User from "../models/user.js";
 import ErrorHandler from "../utils/errorHandler.js";
 
-// 1. Mark Attendance (Called by Python AI or Admin) => /api/v1/attendance/mark
-import { spawn } from 'child_process';
+import axios from 'axios';
+import FormData from 'form-data';
 import fs from 'fs';
-import path from 'path';
 
+// 1. Mark Attendance (Called by Frontend) => /api/v1/attendance/mark
 export const markAttendanceWithAI = catchAsyncErrors(async (req, res, next) => {
     const files = req.files;
 
@@ -15,99 +15,79 @@ export const markAttendanceWithAI = catchAsyncErrors(async (req, res, next) => {
         return res.status(400).json({ success: false, message: "No photos uploaded." });
     }
 
-    const filePaths = files.map(file => path.resolve(file.path));
-
-    const pythonProjectDir = path.resolve(`${process.env.PYTHON_PROJECT_DIR}`);
-    const pythonExecutable = path.resolve(`${process.env.PYTHON_EXECUTABLE}`);
-
-    const pythonProcess = spawn(pythonExecutable, ['-m', 'src.test_image', ...filePaths], {
-        cwd: pythonProjectDir
-    });
-
-    let pythonOutput = '';
-
-    pythonProcess.on('error', (error) => {
-        console.error(`[CRITICAL] Failed to start Python Engine:`, error);
-        filePaths.forEach(fp => { if (fs.existsSync(fp)) fs.unlinkSync(fp); });
-        return res.status(500).json({
-            success: false,
-            message: "Server Configuration Error: Could not start the AI engine."
+    try {
+        // --- 1. PREPARE DATA ---
+        const formData = new FormData();
+        files.forEach((file) => {
+            formData.append('images', fs.createReadStream(file.path));
         });
-    });
 
-    pythonProcess.stdout.on('data', (data) => {
-        pythonOutput += data.toString();
-        console.log(`[Python Output]: ${data.toString().trim()}`);
-    });
+        // --- 2. CALL PYTHON API (HTTP instead of Spawn) ---
+        const pythonApiUrl = process.env.PYTHON_API_URL;
 
-    pythonProcess.stderr.on('data', (data) => {
-        console.error(`[Python Error]: ${data.toString()}`);
-    });
+        // This line replaces all the old 'pythonProcess' logic
+        const response = await axios.post(pythonApiUrl, formData, {
+            headers: { ...formData.getHeaders() }
+        });
 
-    pythonProcess.on('close', async (code) => {
-        filePaths.forEach(fp => { if (fs.existsSync(fp)) fs.unlinkSync(fp); });
+        // Clean up uploaded files from Node server disk immediately after sending
+        files.forEach(file => { if (fs.existsSync(file.path)) fs.unlinkSync(file.path); });
 
-        if (code !== 0 && code !== null) {
-            return res.status(500).json({ success: false, message: "AI processing failed or crashed." });
-        }
+        // --- 3. PROCESS RESULTS ---
+        const { recognizedStudents } = response.data;
+        const recognizedRollNumbers = recognizedStudents.map(student => student.rollNumber);
 
-        try {
-            const resultString = pythonOutput.split('===RESULT===')[1];
-
-            if (!resultString) {
-                throw new Error("Python script did not output ===RESULT===");
-            }
-
-            const resultJson = JSON.parse(resultString.trim());
-            const recognizedRollNumbers = resultJson.recognizedStudents.map(student => student.rollNumber);
-
-            if (recognizedRollNumbers.length === 0) {
-                return res.status(200).json({
-                    success: true,
-                    message: "No recognized faces found in the uploaded images.",
-                    recognizedStudents: []
-                });
-            }
-
-            const today = new Date();
-            const formattedDate = today.toISOString().split('T')[0];
-            const newlyMarkedStudents = [];
-
-            for (const rollNumber of recognizedRollNumbers) {
-                const student = await User.findOne({ rollNumber });
-
-                if (student) {
-                    const existingAttendance = await Attendance.findOne({
-                        student: student._id,
-                        date: formattedDate
-                    });
-
-                    if (!existingAttendance) {
-                        await Attendance.create({
-                            student: student._id,
-                            date: formattedDate,
-                            aiConfidenceScore: 100,
-                            cameraLocation: "Manual Upload - Bulk Photos",
-                            status: "Present"
-                        });
-                        newlyMarkedStudents.push({ name: student.name, rollNumber: student.rollNumber });
-                    } else {
-                        newlyMarkedStudents.push({ name: student.name, rollNumber: student.rollNumber });
-                    }
-                }
-            }
-
-            res.status(200).json({
+        if (recognizedRollNumbers.length === 0) {
+            return res.status(200).json({
                 success: true,
-                message: `Successfully processed images.`,
-                recognizedStudents: newlyMarkedStudents
+                message: "No recognized faces found in the uploaded images.",
+                recognizedStudents: []
             });
-
-        } catch (error) {
-            console.error("Database or Parsing Error after AI finish:", error);
-            res.status(500).json({ success: false, message: "Error reading AI results or updating database." });
         }
-    });
+
+        const today = new Date();
+        const formattedDate = today.toISOString().split('T')[0];
+        const newlyMarkedStudents = [];
+
+        // --- 4. DATABASE UPDATES ---
+        for (const rollNumber of recognizedRollNumbers) {
+            const student = await User.findOne({ rollNumber });
+
+            if (student) {
+                const existingAttendance = await Attendance.findOne({
+                    student: student._id,
+                    date: formattedDate
+                });
+
+                if (!existingAttendance) {
+                    await Attendance.create({
+                        student: student._id,
+                        date: formattedDate,
+                        aiConfidenceScore: 100,
+                        cameraLocation: "Manual Upload - Bulk Photos",
+                        status: "Present"
+                    });
+                }
+                newlyMarkedStudents.push({ name: student.name, rollNumber: student.rollNumber });
+            }
+        }
+
+        res.status(200).json({
+            success: true,
+            message: `Successfully processed images.`,
+            recognizedStudents: newlyMarkedStudents
+        });
+
+    } catch (error) {
+        // Clean up files if an error occurs during the API call
+        files.forEach(file => { if (fs.existsSync(file.path)) fs.unlinkSync(file.path); });
+
+        console.error("AI processing or Database Error:", error);
+        res.status(500).json({
+            success: false,
+            message: "AI processing failed. Ensure the Python server is running."
+        });
+    }
 });
 
 // 2. Get Logged-in Student's Attendance => /api/v1/attendance/me
