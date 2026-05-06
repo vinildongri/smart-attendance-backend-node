@@ -149,38 +149,82 @@ export const updateAttendance = catchAsyncErrors(async (req, res, next) => {
     });
 });
 
-// 5. Get Student Analytics (ADMIN) => /api/v1/admin/attendance/stats/:studentId
+
+// 5. Get Student Analytics (ADMIN) => /api/v1/admin/attendance/stats/:studentId (or /:rollNumber)
 export const getStudentStats = catchAsyncErrors(async (req, res, next) => {
     const { studentId } = req.params;
 
-    const records = await Attendance.find({ student: studentId });
-
-    if (!records || records.length === 0) {
-        return next(new ErrorHandler("No attendance records found for this student.", 404));
-    }
-
-    let presentCount = 0;
-    let absentCount = 0;
-    let lateCount = 0;
-
-    records.forEach(record => {
-        if (record.status === "Present" || record.status === "Excused") presentCount++;
-        else if (record.status === "Absent") absentCount++;
-        else if (record.status === "Late" || record.status === "Half-Day") lateCount++;
+    // 1. Search by ROLL NUMBER
+    const student = await User.findOne({
+        rollNumber: studentId.toUpperCase(),
+        role: 'student'
     });
 
-    const totalDays = records.length;
-    // Calculate percentage (treating 'Late' as a full day present for this basic math, adjust if needed)
-    const attendancePercentage = ((presentCount + lateCount) / totalDays) * 100;
+    if (!student) {
+        return next(new ErrorHandler(`Student with Roll Number ${studentId} not found in the database.`, 404));
+    }
 
+    // 2. CRITICAL FIX: Get the TRUE total number of classes held globally.
+    // This finds every unique date recorded in the entire Attendance collection.
+    const uniqueDates = await Attendance.distinct("date");
+    const totalSystemClasses = uniqueDates.length;
+
+    // 3. Get the student's specific present/late records
+    const analytics = await Attendance.aggregate([
+        {
+            $match: { student: student._id }
+        },
+        {
+            $group: {
+                _id: null,
+                presentCount: {
+                    $sum: { $cond: [{ $in: ["$status", ["Present", "Excused"]] }, 1, 0] }
+                },
+                lateCount: {
+                    $sum: { $cond: [{ $in: ["$status", ["Late", "Half-Day"]] }, 1, 0] }
+                },
+                avgAiConfidence: { $avg: "$aiConfidenceScore" }
+            }
+        }
+    ]);
+
+    // Default values if student has 0 records
+    let present = 0;
+    let late = 0;
+    let avgAiConfidence = "N/A";
+
+    if (analytics && analytics.length > 0) {
+        present = analytics[0].presentCount;
+        late = analytics[0].lateCount;
+        avgAiConfidence = analytics[0].avgAiConfidence ? analytics[0].avgAiConfidence.toFixed(2) : "N/A";
+    }
+
+    // 4. Calculate True Absences
+    // If 10 classes were held, and they were present for 4, they are absent for 6.
+    // (We use Math.max to prevent negative numbers just in case of weird data)
+    const trueAbsent = Math.max(0, totalSystemClasses - present - late);
+
+    // 5. Calculate True Percentage based on global classes
+    const attendancePercentage = totalSystemClasses > 0
+        ? ((present + late) / totalSystemClasses) * 100
+        : 0;
+
+    // 6. Send Response
     res.status(200).json({
         success: true,
-        studentId,
-        totalDays,
-        present: presentCount,
-        absent: absentCount,
-        late: lateCount,
-        percentage: attendancePercentage.toFixed(2) + "%"
+        student: {
+            id: student._id,
+            name: student.name,
+            rollNumber: student.rollNumber
+        },
+        stats: {
+            totalDays: totalSystemClasses, // Now returning 10 instead of 4
+            present: present,              // 4
+            late: late,                    // 0
+            absent: trueAbsent,            // 6
+            averageAiConfidence: avgAiConfidence,
+            percentage: attendancePercentage.toFixed(2) + "%" // 40.00%
+        }
     });
 });
 

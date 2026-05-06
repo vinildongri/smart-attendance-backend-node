@@ -27,7 +27,8 @@ app.use(cors({
   origin: [
     'http://localhost:5173', // Keep local for testing
     'http://localhost:3000',
-    'https://smart-attendance-frontend-kappa.vercel.app' // ADD YOUR VERCEL FRONTEND URL HERE
+    'https://smart-attendance-frontend-kappa.vercel.app', // ADD YOUR VERCEL FRONTEND URL HERE
+    '*'
   ],
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'], // Ensure OPTIONS is allowed for preflight
   credentials: true,
